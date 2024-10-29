@@ -1,87 +1,71 @@
-#include <SoftwareSerial.h>
-#include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_ADXL345_U.h>
-#include <TinyGPS++.h>
+import serial
+import time
+import math
+import requests  # Optional, for making HTTP requests
+from tinygpsplus import TinyGPSPlus
 
-// Define pins
-#define GPS_BAUD 9600
-#define GSM_BAUD 9600
-#define ACCELEROMETER_ADDRESS 0x53
+# Define constants
+GPS_BAUD = 9600
+GSM_BAUD = 9600
+ACCIDENT_THRESHOLD = 20.0  # Threshold for collision detection
+PHONE_NUMBER = "+917075403540"  # Replace with your emergency contact number
 
-// Initialize serial communications
-SoftwareSerial gpsSerial(4, 3); // RX, TX for GPS
-SoftwareSerial gsmSerial(7, 8); // RX, TX for GSM
+class AccidentDetectionSystem:
+    def __init__(self):
+        # Initialize serial communications
+        self.gps_serial = serial.Serial('/dev/ttyUSB0', GPS_BAUD)  # Adjust port as necessary
+        self.gsm_serial = serial.Serial('/dev/ttyUSB1', GSM_BAUD)  # Adjust port as necessary
+        self.gps = TinyGPSPlus()
+        self.accident_detected = False
 
-TinyGPSPlus gps;
-Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified(ACCELEROMETER_ADDRESS);
+        # Set up GSM module
+        self.gsm_serial.write(b'AT\r')
+        time.sleep(1)
+        self.gsm_serial.write(b'AT+CMGF=1\r')  # Set SMS mode to text
+        time.sleep(1)
 
-// Variables
-bool accidentDetected = false;
-float accidentThreshold = 20.0; // Example threshold for collision detection
-String phoneNumber = "+917075403540"; // Replace with your emergency contact number
+    def read_accelerometer(self):
+        # Placeholder for accelerometer reading
+        # Replace with actual accelerometer reading logic
+        return 0, 0, 0  # Replace with actual x, y, z values from accelerometer
 
-void setup() {
-  // Start serial communication
-  Serial.begin(9600);
-  gpsSerial.begin(GPS_BAUD);
-  gsmSerial.begin(GSM_BAUD);
+    def check_accident(self):
+        x, y, z = self.read_accelerometer()
+        acceleration = math.sqrt(x**2 + y**2 + z**2)
+        
+        if acceleration > ACCIDENT_THRESHOLD:
+            if not self.accident_detected:
+                self.accident_detected = True
+                self.send_alert()
+        else:
+            self.accident_detected = False
 
-  // Initialize accelerometer
-  if (!accel.begin()) {
-    Serial.println("Couldn't find ADXL345 accelerometer");
-    while (1);
-  }
+    def read_gps(self):
+        while self.gps_serial.in_waiting > 0:
+            self.gps.encode(self.gps_serial.read())
+            if self.gps.location.is_updated():
+                latitude = self.gps.location.lat()
+                longitude = self.gps.location.lng()
+                return latitude, longitude
+        return None, None
 
-  // Initialize GSM module
-  gsmSerial.println("AT"); // Check if GSM module is ready
-  delay(1000);
-  gsmSerial.println("AT+CMGF=1"); // Set SMS mode to text
-  delay(1000);
-}
+    def send_alert(self):
+        latitude, longitude = self.read_gps()
+        if latitude is not None and longitude is not None:
+            message = f"Accident detected! Location: http://maps.google.com/?q={latitude},{longitude}"
+            self.gsm_serial.write(f'AT+CMGS="{PHONE_NUMBER}"\r'.encode())
+            time.sleep(1)
+            self.gsm_serial.write(f'{message}\r'.encode())
+            time.sleep(1)
+            self.gsm_serial.write(bytes([26]))  # ASCII code for CTRL+Z
+            time.sleep(1)
 
-void loop() {
-  // Read accelerometer data
-  sensors_event_t event;
-  accel.getEvent(&event);
+    def run(self):
+        while True:
+            self.check_accident()
+            time.sleep(1)  # Loop delay
 
-  // Check for collision based on acceleration
-  float acceleration = sqrt(sq(event.acceleration.x) + sq(event.acceleration.y) + sq(event.acceleration.z));
-  if (acceleration > accidentThreshold) {
-    if (!accidentDetected) {
-      accidentDetected = true;
-      sendAlert();
-    }
-  } else {
-    accidentDetected = false;
-  }
+if __name__ == "__main__":
+    accident_system = AccidentDetectionSystem()
+    accident_system.run()
 
-  // Read GPS data
-  while (gpsSerial.available() > 0) {
-    gps.encode(gpsSerial.read());
-
-    if (gps.location.isUpdated()) {
-      Serial.print("Latitude= "); 
-      Serial.print(gps.location.lat(), 6);
-      Serial.print(" Longitude= "); 
-      Serial.println(gps.location.lng(), 6);
-    }
-  }
-}
-
-void sendAlert() {
-  // Read GPS coordinates
-  String message = "Accident detected! Location: ";
-  message += "http://maps.google.com/?q=";
-  message += gps.location.lat(), 6;
-  message += ",";
-  message += gps.location.lng(), 6;
-
-  // Send SMS
-  gsmSerial.println("AT+CMGS=\"" + phoneNumber + "\"");
-  delay(1000);
-  gsmSerial.println(message);
-  delay(1000);
-  gsmSerial.println((char)26); // ASCII code for CTRL+Z
-  delay(1000);
-}
